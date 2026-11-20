@@ -13,14 +13,9 @@ const createEmptyDoc = () => ({
 
 function StudentOrderPage() {
   const user = JSON.parse(localStorage.getItem('pq_user') || 'null');
-  const [shopInfo, setShopInfo] = useState({
-    shopName: 'Campus Print Shop',
-    shopAddress: 'Main Gate',
-    bwRate: 2,
-    doubleSidedRate: 3,
-    colorRate: 10,
-    shopOpen: true,
-  });
+  const [shopsList, setShopsList] = useState([]);
+  const [selectedShopEmail, setSelectedShopEmail] = useState(user?.shopEmail || '');
+  const [shopInfo, setShopInfo] = useState(null);
 
   const [documents, setDocuments] = useState([createEmptyDoc()]);
   const [notes, setNotes] = useState('');
@@ -29,8 +24,27 @@ function StudentOrderPage() {
   const [errorMsg, setErrorMsg] = useState('');
 
   useEffect(() => {
-    api.get('/auth/shop-info').then((res) => setShopInfo(res.data));
+    api.get('/auth/shops').then((res) => {
+      setShopsList(res.data);
+      const initialEmail = user?.shopEmail || (res.data[0]?.email || '');
+      setSelectedShopEmail(initialEmail);
+    });
   }, []);
+
+  useEffect(() => {
+    if (!selectedShopEmail) return;
+    const matched = shopsList.find(
+      (s) => s.email.toLowerCase() === selectedShopEmail.toLowerCase().trim()
+    );
+    if (matched) {
+      setShopInfo(matched);
+    } else {
+      api
+        .get(`/auth/shop-info?shopEmail=${encodeURIComponent(selectedShopEmail)}`)
+        .then((res) => setShopInfo(res.data))
+        .catch(() => setShopInfo(null));
+    }
+  }, [selectedShopEmail, shopsList]);
 
   if (!user) return <Navigate to="/auth" replace />;
   if (user.role === 'shopkeeper') return <Navigate to="/shop" replace />;
@@ -50,6 +64,10 @@ function StudentOrderPage() {
     setDocuments((prev) => prev.filter((_, i) => i !== index));
   };
 
+  const bwRate = shopInfo?.bwRate || 2;
+  const doubleSidedRate = shopInfo?.doubleSidedRate || 3;
+  const colorRate = shopInfo?.colorRate || 10;
+
   const totalEstimatedPrice = documents.reduce((sum, doc) => {
     const pages = Math.max(1, Number(doc.pages || 1));
     const copies = Math.max(1, Number(doc.copies || 1));
@@ -57,10 +75,10 @@ function StudentOrderPage() {
     const effectiveSheets = isDouble ? Math.ceil(pages / 2) : pages;
     const rate =
       doc.printType === 'Color'
-        ? shopInfo.colorRate
+        ? colorRate
         : isDouble
-        ? shopInfo.doubleSidedRate || 3
-        : shopInfo.bwRate;
+        ? doubleSidedRate
+        : bwRate;
 
     return sum + rate * effectiveSheets * copies;
   }, 0);
@@ -77,8 +95,14 @@ function StudentOrderPage() {
     setErrorMsg('');
 
     try {
-      const res = await api.post('/orders', { documents, notes });
+      const res = await api.post('/orders', {
+        documents,
+        notes,
+        shopEmail: selectedShopEmail,
+      });
       setCreatedOrder(res.data);
+      const updatedUser = { ...user, shopEmail: selectedShopEmail };
+      localStorage.setItem('pq_user', JSON.stringify(updatedUser));
       setDocuments([createEmptyDoc()]);
       setNotes('');
     } catch (err) {
@@ -96,18 +120,56 @@ function StudentOrderPage() {
           Student: <strong>{user.name}</strong> ({user.department}) | {user.phone}
         </p>
 
-        {shopInfo.shopOpen === false && (
-          <div className="toast-error">
-            Print Shop Temporarily Paused: The counter is currently on a break or maintenance. New orders cannot be placed until it reopens.
+        <div className="form-group">
+          <div>
+            <label className="field-label">Select Your College Print Shop (by Shopkeeper Email)</label>
+            {shopsList.length > 0 && (
+              <select
+                className="input-box"
+                value={selectedShopEmail}
+                onChange={(e) => setSelectedShopEmail(e.target.value)}
+              >
+                <option value="">-- Choose a registered college print shop --</option>
+                {shopsList.map((s) => (
+                  <option key={s._id} value={s.email}>
+                    {s.shopName} — {s.shopAddress} ({s.email})
+                  </option>
+                ))}
+              </select>
+            )}
+            <input
+              required
+              type="email"
+              placeholder="Enter shopkeeper email (e.g. shop@university.edu)"
+              className="input-box"
+              value={selectedShopEmail}
+              onChange={(e) => setSelectedShopEmail(e.target.value)}
+            />
           </div>
-        )}
-
-        <div className="shop-banner">
-          <strong>{shopInfo.shopName}</strong> — {shopInfo.shopAddress} <br />
-          Rates: <strong>₹{shopInfo.bwRate}/sheet (Single B&W)</strong> |{' '}
-          <strong>₹{shopInfo.doubleSidedRate || 3}/sheet (Double-Sided B&W)</strong> |{' '}
-          <strong>₹{shopInfo.colorRate}/sheet (Color)</strong>
         </div>
+
+        {shopInfo ? (
+          <>
+            {shopInfo.shopOpen === false && (
+              <div className="toast-error">
+                Print Shop Temporarily Paused: {shopInfo.shopName} is currently on a break or maintenance. New orders cannot be placed until it reopens.
+              </div>
+            )}
+
+            <div className="shop-banner">
+              <strong>{shopInfo.shopName}</strong> ({shopInfo.email}) — {shopInfo.shopAddress} <br />
+              Rates: <strong>₹{bwRate}/sheet (Single B&W)</strong> |{' '}
+              <strong>₹{doubleSidedRate}/sheet (Double-Sided B&W)</strong> |{' '}
+              <strong>₹{colorRate}/sheet (Color)</strong>
+            </div>
+          </>
+        ) : (
+          selectedShopEmail && (
+            <div className="toast-error">
+              No registered print shop matches &quot;{selectedShopEmail}&quot;. Please verify the shopkeeper&apos;s email address.
+            </div>
+          )
+        )}
 
         {errorMsg && <div className="toast-error">{errorMsg}</div>}
 
@@ -193,7 +255,7 @@ function StudentOrderPage() {
                       onChange={(e) => handleDocChange(idx, 'printType', e.target.value)}
                     >
                       <option value="B&W">B&W</option>
-                      <option value="Color">Color (₹{shopInfo.colorRate}/sheet)</option>
+                      <option value="Color">Color (₹{colorRate}/sheet)</option>
                     </select>
                   </div>
 
@@ -204,8 +266,8 @@ function StudentOrderPage() {
                       value={doc.sides}
                       onChange={(e) => handleDocChange(idx, 'sides', e.target.value)}
                     >
-                      <option value="Single-Sided">Single-Sided (₹{shopInfo.bwRate})</option>
-                      <option value="Double-Sided">Double-Sided (₹{shopInfo.doubleSidedRate || 3})</option>
+                      <option value="Single-Sided">Single-Sided (₹{bwRate})</option>
+                      <option value="Double-Sided">Double-Sided (₹{doubleSidedRate})</option>
                     </select>
                   </div>
                 </div>
@@ -231,7 +293,7 @@ function StudentOrderPage() {
           <button
             type="submit"
             className="btn-primary"
-            disabled={loading || shopInfo.shopOpen === false}
+            disabled={loading || !shopInfo || shopInfo.shopOpen === false}
           >
             {loading
               ? 'Generating Pickup Code...'
@@ -241,7 +303,7 @@ function StudentOrderPage() {
 
         {createdOrder && (
           <div className="ticket-box">
-            <p>Show this 3-digit pickup code at the counter to collect your printouts:</p>
+            <p>Sent to <strong>{createdOrder.shopEmail}</strong> — Show this 3-digit pickup code at the counter:</p>
             <div className="pickup-code-display">#{createdOrder.pickupCode}</div>
             <p>
               <strong>Documents:</strong> {createdOrder.documents?.length} |{' '}

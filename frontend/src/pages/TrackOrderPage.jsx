@@ -10,20 +10,25 @@ function TrackOrderPage() {
   const [error, setError] = useState('');
 
   const fetchOrder = async (targetCode, targetPhone4) => {
-    if (targetCode.length !== 3 || targetPhone4.length !== 4) return;
+    if (targetCode.length !== 3) return;
     try {
-      const res = await api.get(`/orders/track/${targetCode}?phoneLast4=${targetPhone4}`);
+      const query = targetPhone4 ? `?phoneLast4=${targetPhone4}` : '';
+      const res = await api.get(`/orders/track/${targetCode}${query}`);
       setOrder(res.data);
       setError('');
     } catch (err) {
       setOrder(null);
-      setError(err.response?.data?.message || 'Order not found.');
+      setError(
+        err.response?.data?.message ||
+          'No active order found matching this pickup code. It may already be completed or cancelled.'
+      );
     }
   };
 
   useEffect(() => {
-    if (code.length !== 3 || phoneLast4.length !== 4) {
+    if (code.length !== 3) {
       setOrder(null);
+      setError('');
       return;
     }
     fetchOrder(code, phoneLast4);
@@ -45,11 +50,13 @@ function TrackOrderPage() {
     <div className="container-sm">
       <div className="card">
         <h1 className="page-title">Track Print Status</h1>
-        <p className="page-subtitle">Enter your 3-digit pickup code and last 4 phone digits to view live status.</p>
+        <p className="page-subtitle">
+          Enter your 3-digit pickup code to check live status. Last 4 phone digits are optional.
+        </p>
 
         <div className="form-row">
           <div>
-            <label className="field-label">3-Digit Pickup Code</label>
+            <label className="field-label">3-Digit Pickup Code *</label>
             <input
               type="text"
               maxLength="3"
@@ -60,11 +67,11 @@ function TrackOrderPage() {
             />
           </div>
           <div>
-            <label className="field-label">Last 4 Phone Digits</label>
+            <label className="field-label">Last 4 Phone Digits (Optional)</label>
             <input
               type="text"
               maxLength="4"
-              placeholder="e.g. 7890"
+              placeholder="Optional (e.g. 7890)"
               className="input-box"
               value={phoneLast4}
               onChange={(e) => setPhoneLast4(e.target.value.replace(/\D/g, ''))}
@@ -78,6 +85,7 @@ function TrackOrderPage() {
           <div className="status-result">
             <p><strong>Pickup Code:</strong> #{order.pickupCode}</p>
             <p><strong>Student:</strong> {order.studentName}</p>
+            {order.shopEmail && <p><strong>Print Shop:</strong> {order.shopEmail}</p>}
             <div>
               <strong>Documents ({order.documents?.length || 1}):</strong>
               <ul className="doc-list-compact">

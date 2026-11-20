@@ -10,6 +10,8 @@ const documentItemSchema = new mongoose.Schema({
 });
 
 const printOrderSchema = new mongoose.Schema({
+  shopId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  shopEmail: { type: String, lowercase: true, trim: true, default: '' },
   studentId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   pickupCode: { type: String, required: true },
   studentName: { type: String, required: true },

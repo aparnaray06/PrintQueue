@@ -7,23 +7,50 @@ import { protect, shopkeeperOnly } from '../middleware/auth.js';
 
 const router = express.Router();
 
-// Register
+// Register (Students can link via Shopkeeper Email)
 router.post('/register', async (req, res) => {
   try {
-    const { name, email, password, phone, role, department, shopName, shopAddress } = req.body;
-    const exists = await User.findOne({ email });
+    const {
+      name,
+      email,
+      password,
+      phone,
+      role,
+      department,
+      shopEmail,
+      shopName,
+      shopAddress,
+    } = req.body;
+
+    const exists = await User.findOne({ email: email.toLowerCase().trim() });
     if (exists) return res.status(400).json({ message: 'Email is already registered.' });
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const normalizedRole = (role || 'student').toLowerCase();
 
+    let linkedShopId = null;
+    let normalizedShopEmail = '';
+
+    if (normalizedRole === 'student' && shopEmail) {
+      normalizedShopEmail = shopEmail.toLowerCase().trim();
+      const targetShop = await User.findOne({ role: 'shopkeeper', email: normalizedShopEmail });
+      if (!targetShop) {
+        return res.status(400).json({
+          message: 'No print shop found with that shopkeeper email. Please check and try again.',
+        });
+      }
+      linkedShopId = targetShop._id;
+    }
+
     const user = await User.create({
       name,
-      email,
+      email: email.toLowerCase().trim(),
       password: hashedPassword,
       phone,
       role: normalizedRole,
       department: normalizedRole === 'student' ? (department || 'B.Tech - CSE (Computer Science)') : undefined,
+      shopId: linkedShopId,
+      shopEmail: normalizedShopEmail,
       shopName: normalizedRole === 'shopkeeper' ? shopName : undefined,
       shopAddress: normalizedRole === 'shopkeeper' ? shopAddress : undefined,
     });
@@ -42,7 +69,7 @@ router.post('/register', async (req, res) => {
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
-    const user = await User.findOne({ email });
+    const user = await User.findOne({ email: email.toLowerCase().trim() });
     if (!user) return res.status(400).json({ message: 'Invalid email or password.' });
 
     const isMatch = await bcrypt.compare(password, user.password);
@@ -58,21 +85,36 @@ router.post('/login', async (req, res) => {
   }
 });
 
-// Get Shop Info & Rates
+// List All Registered Print Shops (With Shopkeeper Email & College Address)
+router.get('/shops', async (req, res) => {
+  try {
+    const shops = await User.find({ role: 'shopkeeper' })
+      .select('_id name email shopName shopAddress bwRate doubleSidedRate colorRate shopOpen phone')
+      .sort({ shopName: 1 });
+    res.json(shops);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Get Specific Shop Info by Shopkeeper Email or ID
 router.get('/shop-info', async (req, res) => {
-  const shop = await User.findOne({ role: 'shopkeeper' }).select(
-    'shopName shopAddress bwRate doubleSidedRate colorRate phone shopOpen'
-  );
-  res.json(
-    shop || {
-      shopName: 'Campus Print Shop',
-      shopAddress: 'Main Gate',
-      bwRate: 2,
-      doubleSidedRate: 3,
-      colorRate: 10,
-      shopOpen: true,
+  try {
+    const { shopEmail, shopId } = req.query;
+    let query = { role: 'shopkeeper' };
+    if (shopEmail) query.email = shopEmail.toLowerCase().trim();
+    else if (shopId) query._id = shopId;
+
+    const shop = await User.findOne(query).select(
+      '_id name email shopName shopAddress bwRate doubleSidedRate colorRate phone shopOpen'
+    );
+    if (!shop) {
+      return res.status(404).json({ message: 'Print shop not found for the given email.' });
     }
-  );
+    res.json(shop);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
 });
 
 // Toggle Shop Open / Paused Status (Shopkeeper Only)
@@ -87,12 +129,28 @@ router.patch('/shop-status', protect, shopkeeperOnly, async (req, res) => {
   }
 });
 
-// Update Profile
+// Update Profile (Allows Student to Update Linked Shopkeeper Email)
 router.put('/profile', protect, async (req, res) => {
   try {
+    const updates = { ...req.body };
+
+    if (updates.shopEmail !== undefined) {
+      const cleanShopEmail = updates.shopEmail.toLowerCase().trim();
+      if (cleanShopEmail) {
+        const targetShop = await User.findOne({ role: 'shopkeeper', email: cleanShopEmail });
+        if (!targetShop) {
+          return res.status(400).json({
+            message: 'No registered shopkeeper found with this email address.',
+          });
+        }
+        updates.shopId = targetShop._id;
+        updates.shopEmail = targetShop.email;
+      }
+    }
+
     const updated = await User.findByIdAndUpdate(
       req.user.id,
-      req.body,
+      updates,
       { returnDocument: 'after' }
     ).select('-password');
     res.json(updated);
@@ -119,20 +177,27 @@ router.patch('/students/:studentId/partial-pay', protect, shopkeeperOnly, async 
   }
 });
 
-// Get Students Grouped by Department with Optional Academic Year Filter (Shopkeeper Only)
+// Get Students Grouped by Department ONLY for Logged-In Shopkeeper
 router.get('/students-by-department', protect, shopkeeperOnly, async (req, res) => {
   try {
     const { year } = req.query;
-    const students = await User.find({ role: { $regex: /^student$/i } })
-      .select('-password')
-      .sort({ department: 1, name: 1 });
+    const shopId = req.user.id;
 
-    const orderFilter = { status: { $ne: 'Cancelled' } };
+    const orderFilter = { shopId, status: { $ne: 'Cancelled' } };
     if (year && year !== 'All') {
       orderFilter.academicYear = year;
     }
 
     const orders = await PrintOrder.find(orderFilter).sort({ createdAt: -1 });
+    const orderStudentIds = orders.map((o) => o.studentId);
+
+    const students = await User.find({
+      role: { $regex: /^student$/i },
+      $or: [{ shopId }, { _id: { $in: orderStudentIds } }],
+    })
+      .select('-password')
+      .sort({ department: 1, name: 1 });
+
     const groupedMap = {};
 
     students.forEach((st) => {

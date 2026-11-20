@@ -25,10 +25,11 @@ function ShopDashboardPage() {
   };
 
   const loadData = async () => {
+    if (!user?.email) return;
     const [ordersRes, deptRes, shopRes] = await Promise.allSettled([
       api.get('/orders/all'),
       api.get(`/auth/students-by-department?year=${selectedYear}`),
-      api.get('/auth/shop-info'),
+      api.get(`/auth/shop-info?shopEmail=${encodeURIComponent(user.email)}`),
     ]);
 
     if (ordersRes.status === 'fulfilled') setOrders(ordersRes.value.data);
@@ -48,14 +49,22 @@ function ShopDashboardPage() {
   }
 
   const handleToggleShopStatus = async () => {
-    const res = await api.patch('/auth/shop-status');
-    setShopOpen(res.data.shopOpen);
-    notify(res.data.shopOpen ? 'Print shop is now OPEN.' : 'Print shop orders PAUSED.');
+    try {
+      const res = await api.patch('/auth/shop-status');
+      setShopOpen(res.data.shopOpen);
+      notify(res.data.shopOpen ? 'Print shop is now OPEN.' : 'Print shop orders PAUSED.');
+    } catch (err) {
+      setErrorMsg(err.response?.data?.message || 'Failed to update shop status.');
+    }
   };
 
   const handleUpdateStatus = async (id, status, rejectionReason = '') => {
-    await api.patch(`/orders/${id}/status`, { status, rejectionReason });
-    loadData();
+    try {
+      await api.patch(`/orders/${id}/status`, { status, rejectionReason });
+      loadData();
+    } catch (err) {
+      setErrorMsg(err.response?.data?.message || 'Failed to update order status.');
+    }
   };
 
   const handleSaveFine = async (orderId, pickupCode, extraCharge, extraChargeReason) => {
@@ -76,15 +85,23 @@ function ShopDashboardPage() {
   };
 
   const handleMarkPaid = async (id) => {
-    await api.patch(`/orders/${id}/pay`);
-    notify('Order marked as Paid.');
-    loadData();
+    try {
+      await api.patch(`/orders/${id}/pay`);
+      notify('Order marked as Paid.');
+      loadData();
+    } catch (err) {
+      setErrorMsg(err.response?.data?.message || 'Failed to mark order as paid.');
+    }
   };
 
   const handleSettleAll = async (studentId, studentName) => {
-    await api.patch(`/orders/settle-student/${studentId}`);
-    notify(`All pending dues settled for ${studentName}.`);
-    loadData();
+    try {
+      await api.patch(`/orders/settle-student/${studentId}`);
+      notify(`All pending dues settled for ${studentName}.`);
+      loadData();
+    } catch (err) {
+      setErrorMsg(err.response?.data?.message || 'Failed to settle student dues.');
+    }
   };
 
   const handleRecordPartial = async (studentId, amount) => {
@@ -112,7 +129,9 @@ function ShopDashboardPage() {
         <div className="dashboard-header no-print">
           <div>
             <h1 className="page-title">{user.shopName} — Counter Dashboard</h1>
-            <p className="page-subtitle">Manage active print queue, extra charges, and department-wise ledgers</p>
+            <p className="page-subtitle">
+              Shopkeeper Email: <strong>{user.email}</strong> | Manage active print queue, extra charges, and department-wise ledgers
+            </p>
           </div>
           <div className="action-group">
             <button onClick={handleToggleShopStatus} className={shopOpen ? 'btn-pay' : 'btn-fine'}>
